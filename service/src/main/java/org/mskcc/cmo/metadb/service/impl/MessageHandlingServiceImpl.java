@@ -26,6 +26,7 @@ import org.mskcc.cmo.metadb.model.MetaDbSample;
 import org.mskcc.cmo.metadb.model.SampleMetadata;
 import org.mskcc.cmo.metadb.service.MessageHandlingService;
 import org.mskcc.cmo.metadb.service.MetaDbRequestService;
+import org.mskcc.cmo.metadb.service.SampleService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -44,6 +45,9 @@ public class MessageHandlingServiceImpl implements MessageHandlingService {
 
     @Autowired
     private MetaDbRequestService requestService;
+    
+    @Autowired
+    private SampleService sampleService;
 
     private final ObjectMapper mapper = new ObjectMapper();
     private static boolean initialized = false;
@@ -99,7 +103,8 @@ public class MessageHandlingServiceImpl implements MessageHandlingService {
     public void initialize(Gateway gateway) throws Exception {
         if (!initialized) {
             messagingGateway = gateway;
-            setupIgoNewRequestHandler(messagingGateway, this);
+//            setupIgoNewRequestHandler(messagingGateway, this);
+            setupRequestReplyHandler(messagingGateway, this);
             initializeNewRequestHandlers();
             initialized = true;
         } else {
@@ -162,6 +167,56 @@ public class MessageHandlingServiceImpl implements MessageHandlingService {
             }
         });
     }
+    private void setupRequestReplyHandler(Gateway gateway, MessageHandlingService messageHandlingService) throws Exception {
+        gateway.subscribe("METADBREPLY.patient-samples-request", Object.class, new MessageConsumer() {
+            @Override
+            public void onMessage(Message msg, Object o) {
+                try {
+                    LOG.info("Received message on topic: METADBREPLY.patient-samples-request");
+                    String rawJson = mapper.readValue(
+                            new String(msg.getData(), StandardCharsets.UTF_8),
+                            String.class);
+                    System.out.println("Data received on request topic: " + rawJson);
+                    Map<String, Object> requestMessage = mapper.readValue(rawJson, Map.class);
+                    String replyToSubject = requestMessage.get("reply-to-subject").toString();
+                    String data = requestMessage.get("data").toString();
+                    
+                    List<SampleMetadata> samples = sampleService.getSampleMetadataListByCmoPatientId(data);
+                    String samplesResponse = mapper.writeValueAsString(samples);
+                    System.out.println("\nSending data on reply message: "+ "METADBREPLY.patient-samples-reply" + replyToSubject + ": \n" + samplesResponse);
+                    gateway.publish("METADBREPLY.patient-samples-reply" + replyToSubject, samplesResponse);
+                } catch (Exception e) {
+                    LOG.error("Exception occured in setupRequestReplyHandler", e);
+                }
+            }
+        });
+    }
+//    private void setupRequestReplyHandler(Gateway gateway, MessageHandlingService messageHandlingService) throws Exception {
+//        gateway.subscribe("METADB.patient-samples-request", Object.class, new MessageConsumer() {
+//            @Override
+//            public void onMessage(Message msg, Object o) {
+//                try {
+//                    LOG.info("Received message on topic: METADB.patient-samples-request");
+//                    String msgData = new String(msg.getData(), StandardCharsets.UTF_8);
+//                    if (!msgData.isEmpty()) {
+//                        System.out.println("Message data: " + msgData);
+//                        System.out.println("Message reply-to: " + msg.getReplyTo());
+//                        List<SampleMetadata> samples = sampleService.getSampleMetadataListByCmoPatientId(msgData);
+//                        String samplesResponse = mapper.writeValueAsString(samples);
+//                        gateway.reply("METADB.patient-samples-reply", samplesResponse,new MessageConsumer() {
+//                            @Override
+//                            public void onMessage(Message msg, Object o) {
+//                                System.out.println("Message data (ON MESSAGE CONSUMER): " + o.toString());
+//                                System.out.println("Message reply-to: (ON MESSAGE CONSUMER)" + msg.getReplyTo());
+//                            }
+//                        });
+//                    }
+//                } catch (Exception e) {
+//                    LOG.error("Exception occured in setupRequestReplyHandler", e);
+//                }
+//            }
+//        });
+//    }
 
     private List<MetaDbSample> extractMetaDbSamplesFromIgoResponse(Object message)
             throws JsonProcessingException, IOException {
